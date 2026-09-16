@@ -97,7 +97,7 @@ void main() {
         uint32_t r = (idx + tid) / (HSK / 4);
         if (r < Br && d < HSK / 4 &&
             i * Br + r < N) {
-            Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + fa_q_elem(i * Br + r) / 4 + d] * p.scale);
         }
     }
     barrier();
@@ -186,25 +186,25 @@ void main() {
                                 m = f16vec4(mv);
                                 max_mask = max(max_mask, float(mv));
                             } else if (!nem1_bounds_check || i * Br + r * 4 + 3 < p.nem1) {
-                                m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 2) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 3) * m_stride + (j * Bc + c)]);
+                                m = f16vec4(data_m[m_offset + fa_m_row(i * Br + r * 4) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 1) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 2) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 3) + (j * Bc + c)]);
                                 max_mask = max(max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2])), float(m[3]));
                             } else if (i * Br + r * 4 + 2 < p.nem1) {
-                                m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 2) * m_stride + (j * Bc + c)],
+                                m = f16vec4(data_m[m_offset + fa_m_row(i * Br + r * 4) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 1) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 2) + (j * Bc + c)],
                                             0.0);
                                 max_mask = max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2]));
                             } else if (i * Br + r * 4 + 1 < p.nem1) {
-                                m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
-                                            data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
+                                m = f16vec4(data_m[m_offset + fa_m_row(i * Br + r * 4) + (j * Bc + c)],
+                                            data_m[m_offset + fa_m_row(i * Br + r * 4 + 1) + (j * Bc + c)],
                                             0.0,
                                             0.0);
                                 max_mask = max(max(max_mask, float(m[0])), float(m[1]));
                             } else if (i * Br + r * 4 < p.nem1) {
-                                m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
+                                m = f16vec4(data_m[m_offset + fa_m_row(i * Br + r * 4) + (j * Bc + c)],
                                             0.0,
                                             0.0,
                                             0.0);
@@ -550,7 +550,28 @@ void main() {
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
     if (p.k_num > 1) {
-        if (p.gqa_ratio > 1) {
+        if (USE_MQ) {
+            const uint32_t o_base = HSV * p.ne1 * (split_k_index + p.k_num * p.ne2 * iq3) / 4;
+            const uint32_t o_row_stride = HSV * p.ne1 * p.k_num / 4;
+            const uint32_t lm_base = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * p.ne2 * iq3);
+
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                const uint row = i * Br + tile_row(r);
+                if (row < N) {
+                    [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
+                        const uint d = d0 + col_tid;
+                        if (d >= HSV/4) break;
+                        const uint d_local = d0 / threads_per_rowgroup;
+                        mqStore(row, d, Of[r][d_local], o_base, o_row_stride);
+                    }
+                    if (col_tid == 0) {
+                        const uint lm_offset = lm_base + p.ne1 * 2 * p.k_num * (row / p.gqa_ratio) + iq2 + row % p.gqa_ratio;
+                        data_o[lm_offset] = D_TYPE(Lf[r]);
+                        data_o[lm_offset + p.ne1] = D_TYPE(Mf[r]);
+                    }
+                }
+            }
+        } else if (p.gqa_ratio > 1) {
             // note: O and Q have swapped coord 1,2.
             uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
 
@@ -637,7 +658,19 @@ void main() {
 
     uint32_t o_offset = (gqa_iq1*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV) / 4;
 
-    if (p.gqa_ratio > 1) {
+    if (USE_MQ) {
+        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+            const uint row = i * Br + tile_row(r);
+            if (row < N) {
+                [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
+                    const uint d = d0 + col_tid;
+                    if (d >= HSV / 4) break;
+                    const uint d_local = d0 / threads_per_rowgroup;
+                    mqStore(row, d, Of[r][d_local], o_offset, p.ne1 * HSV / 4);
+                }
+            }
+        }
+    } else if (p.gqa_ratio > 1) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             if (tile_row(r) < N) {
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
