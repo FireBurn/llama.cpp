@@ -636,7 +636,19 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35 MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur, head_s);
+    // Optionally draft over the first n LM head rows only (LLAMA_MTP_DRAFT_NVOCAB): low token ids are the frequent tokens.
+    static const int64_t n_draft_vocab = getenv("LLAMA_MTP_DRAFT_NVOCAB") ? atoll(getenv("LLAMA_MTP_DRAFT_NVOCAB")) : 0;
+    if (n_draft_vocab > 0 && n_draft_vocab < head_w->ne[1] && !head_s && !layer.nextn.shared_head_head) {
+        const int64_t n_vocab_full = head_w->ne[1];
+        ggml_tensor * head_sub = ggml_view_2d(ctx0, head_w, head_w->ne[0], n_draft_vocab, head_w->nb[1], 0);
+        cur = ggml_mul_mat(ctx0, head_sub, cur);
+        // the rest of the vocabulary gets a logit of -1e4
+        cur = ggml_scale_bias(ctx0, cur, 1.0f, 1e4f);
+        cur = ggml_pad(ctx0, cur, n_vocab_full - n_draft_vocab, 0, 0, 0);
+        cur = ggml_scale_bias(ctx0, cur, 1.0f, -1e4f);
+    } else {
+        cur = build_lora_mm(head_w, cur, head_s);
+    }
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
