@@ -26,6 +26,9 @@ const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
 const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
 // Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
 const bool USE_SPARSE      = (Flags & 16) != 0;
+// Multi-query GQA: several query rows fold into the GQA rows of one tile and share one K/V pass.
+// Row r maps to query row r / gqa_ratio and head r % gqa_ratio.
+const bool USE_MQ          = (Flags & 32) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -155,7 +158,12 @@ void init_indices()
     N = p.N;
     KV = p.KV;
 
-    if (p.k_num > 1) {
+    if (USE_MQ) {
+        // tiles of Br rows share gl_WorkGroupID.x with split_k
+        gqa_iq1 = 0;
+        split_k_index = gl_WorkGroupID.x % p.k_num;
+        i = gl_WorkGroupID.x / p.k_num;
+    } else if (p.k_num > 1) {
         if (p.gqa_ratio > 1) {
             i = 0;
             // batch and split_k share gl_WorkGroupID.x
@@ -224,6 +232,29 @@ void init_indices()
         start_j = min(split_k_index * per_blocks, total_blocks);
         end_j   = min((split_k_index + 1) * per_blocks, total_blocks);
     }
+}
+
+// Element offset of a Q row relative to q_offset.
+uint32_t fa_q_elem(const in uint32_t row) {
+    if (USE_MQ) {
+        return (row / p.gqa_ratio) * p.nb01 + (row % p.gqa_ratio) * q_stride;
+    }
+    return row * q_stride;
+}
+
+// Mask offset of a Q row relative to m_offset.
+uint32_t fa_m_row(const in uint32_t row) {
+    if (USE_MQ) {
+        return (row / p.gqa_ratio) * KV;
+    }
+    return row * m_stride;
+}
+
+// Store an output row in multi-query gqa mode. o_base is the offset of query row 0 for this split/iq3.
+void mqStore(const in uint32_t row, const in uint32_t c, const in O_TYPEV4 elems, const in uint32_t o_base, const in uint32_t o_row_stride)
+{
+    uint32_t offset = o_base + (row / p.gqa_ratio) * o_row_stride + ((iq2 + row % p.gqa_ratio) * HSV) / 4 + c;
+    data_ov4[offset] = D_TYPEV4(elems);
 }
 
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
