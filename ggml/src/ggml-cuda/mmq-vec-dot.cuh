@@ -162,6 +162,9 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+    // Keep the k01 loop rolled: when LLVM unrolls it, hoisted loads for all iterations
+    // exceed the VGPR budget and the J >= 80 kernels spill heavily on RDNA4.
+#pragma unroll 1
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
         const int k0 = k00 + k01;
 
@@ -495,6 +498,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1 = GGML_PREC_
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+#pragma unroll 1
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
@@ -693,6 +697,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+#pragma unroll 1
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
