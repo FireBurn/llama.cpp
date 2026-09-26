@@ -214,7 +214,16 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
-#ifdef ABL_NO_DEQ
+#if defined(IQ4_PAIR_LUT)
+    const uint q = blk.qs;
+    // low nibbles of bytes (0,1) and (2,3), then high nibbles
+    const uint lo01 = (q & 0xFu) | ((q >> 4) & 0xF0u);
+    const uint lo23 = ((q >> 16) & 0xFu) | ((q >> 20) & 0xF0u);
+    const uint hi01 = ((q >> 4) & 0xFu) | ((q >> 8) & 0xF0u);
+    const uint hi23 = ((q >> 20) & 0xFu) | ((q >> 24) & 0xF0u);
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = cm1_kv_pairs[lo01] | (cm1_kv_pairs[lo23] << 16);
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = cm1_kv_pairs[hi01] | (cm1_kv_pairs[hi23] << 16);
+#elif defined(ABL_NO_DEQ)
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = blk.qs & 0x0F0F0F0F;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = (blk.qs >> 4) & 0x0F0F0F0F;
 #else

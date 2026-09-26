@@ -115,6 +115,10 @@ shared float buf_b_s[BN * BK_STEP];
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 shared int8_t cm1_kvalues[16];
 #endif
+#if defined(IQ4_PAIR_LUT) && (defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS))
+// entry i holds the two decoded bytes of nibble pair (i & 15, i >> 4) in its low 16 bits
+shared uint cm1_kv_pairs[256];
+#endif
 
 #if defined(DATA_A_QUANT_K) || defined(DATA_A_IQ4_XS) || defined(DATA_A_NVFP4)
 #define LOAD_VEC_A 8
@@ -126,15 +130,11 @@ shared int8_t cm1_kvalues[16];
 const uint CM_ELEMS = (TM * TN) / WARP;
 #define ACC_BIAS_BITS 0x4B400000
 #define ACC_BIAS_F    12582912.0f
-#ifdef MAGIC_SUB
-// Accumulators start at the bit pattern of 2^23 + 2^22: the int result reinterpreted as float is
-// exactly bias + acc, and the subtract (VOPD-pairable, unlike v_cvt_f32_i32) recovers float(acc).
-const bool USE_MAGIC_BIAS = false;
-const bool USE_MAGIC_SUB = true;
-#else
 const bool USE_MAGIC_BIAS = WARP != 32;
-const bool USE_MAGIC_SUB = false;
-#endif
+// wave32: accumulators start at the bit pattern of 2^23 + 2^22, so the int result reinterpreted as
+// float is exactly bias + acc (|acc| < 2^22 for one K block), and a subtract, which can dual issue
+// unlike v_cvt_f32_i32, recovers float(acc).
+const bool USE_MAGIC_SUB = WARP == 32;
 
 // Accumulator row for element e: RDNA4 blocked, RDNA3/3.5 interleaved.
 uint cm_elem_row(uint e) {
@@ -189,6 +189,11 @@ void main() {
     if (gl_LocalInvocationIndex < 16u) {
         cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
     }
+#if defined(IQ4_PAIR_LUT)
+    for (uint i = gl_LocalInvocationIndex; i < 256u; i += BLOCK_SIZE) {
+        cm1_kv_pairs[i] = (uint(uint8_t(kvalues_iq4nl_const[i & 15u])) | (uint(uint8_t(kvalues_iq4nl_const[i >> 4u])) << 8u));
+    }
+#endif
     barrier();
 #elif defined(DATA_A_MXFP4)
     if (gl_LocalInvocationIndex < 16u) {
