@@ -28,7 +28,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        A_D_STORE(ks * BM + buf_ib, float(blk.d));
     }
 }
 
@@ -86,7 +86,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        A_D_STORE(ks * BM + buf_ib, float(blk.d));
     }
 }
 
@@ -129,9 +129,18 @@ struct block_a_prefetch {
 
 block_a_prefetch block_a_load(uint ib, uint loadr) {
     block_a_prefetch blk;
+#ifdef ABL_NO_AGLOBAL
+    blk.qs = ib * 2654435761u + loadr;
+    blk.d = float16_t(1.0);
+#elif defined(ABL_NO_ASCALE_GLOBAL)
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = float16_t(1.0);
+#else
     blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
                              data_a_packed16[ib].qs[loadr * 2 + 1]));
     blk.d = data_a_packed16[ib].d;
+#endif
     return blk;
 }
 
@@ -139,7 +148,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr] = blk.qs;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        A_D_STORE(ks * BM + buf_ib, float(blk.d));
     }
 }
 
@@ -169,7 +178,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        A_D_STORE(ks * BM + buf_ib, float(blk.d));
     }
 }
 
@@ -184,9 +193,19 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
     block_a_prefetch blk;
     const uint ib_k = ib / 8;
     const uint ib32 = ib % 8;
+#ifdef ABL_NO_AGLOBAL
+    blk.qs = ib * 2654435761u + loadr;
+    blk.d = 1.0;
+    if (false) {
+#elif defined(ABL_NO_ASCALE_GLOBAL)
+    blk.qs = data_a_packed32[ib_k].qs[4 * ib32 + loadr];
+    blk.d = 1.0;
+    if (false) {
+#else
     blk.qs = data_a_packed32[ib_k].qs[4 * ib32 + loadr];
     blk.d = 0.0;
     if (loadr == 0) {
+#endif
         const uint sl = (data_a_packed32[ib_k].scales_l >> (4 * ib32)) & 0xF;
         const uint sh = (data_a_packed32[ib_k].scales_h >> (2 * ib32)) & 3;
         blk.d = float(data_a_packed32[ib_k].d) * float(int(sl | (sh << 4)) - 32);
@@ -195,6 +214,10 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+#ifdef ABL_NO_DEQ
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = blk.qs & 0x0F0F0F0F;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = (blk.qs >> 4) & 0x0F0F0F0F;
+#else
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
@@ -203,9 +226,10 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
         pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+#endif
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = blk.d;
+        A_D_STORE(ks * BM + buf_ib, blk.d);
     }
 }
 
@@ -237,7 +261,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = e8m0_to_fp32(blk.e) * 0.5;
+        A_D_STORE(ks * BM + buf_ib, e8m0_to_fp32(blk.e) * 0.5);
     }
 }
 
@@ -398,8 +422,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         const uint ib_k = blk.ib / 8;
         const uint sub = blk.ib % 8;
         i8vec2 sc = unpack8(int32_t(int16_t(data_a_packed16[ib_k].scales[sub]))).xy;
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = float(data_a_packed16[ib_k].d) * float(sc.x);
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = float(data_a_packed16[ib_k].d) * float(sc.y);
+        A_D_STORE((ks * KSCALES    ) * BM + buf_ib, float(data_a_packed16[ib_k].d) * float(sc.x));
+        A_D_STORE((ks * KSCALES + 1) * BM + buf_ib, float(data_a_packed16[ib_k].d) * float(sc.y));
     }
 }
 
@@ -456,8 +480,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         uint combined = lo | (hi << 4);
         i8vec2 sc = unpack8(int32_t(combined)).xy;
         float d = float(data_a_packed16[ib_k].d);
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = d * float(int(sc.x) - 32);
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = d * float(int(sc.y) - 32);
+        A_D_STORE((ks * KSCALES    ) * BM + buf_ib, d * float(int(sc.x) - 32));
+        A_D_STORE((ks * KSCALES + 1) * BM + buf_ib, d * float(int(sc.y) - 32));
     }
 }
 
@@ -499,8 +523,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
                       cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
-        buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = ue4m3_to_fp32(blk.d0) * 0.5;
-        buf_a_d[(ks * KSCALES + 1) * BM + buf_ib] = ue4m3_to_fp32(blk.d1) * 0.5;
+        A_D_STORE((ks * KSCALES    ) * BM + buf_ib, ue4m3_to_fp32(blk.d0) * 0.5);
+        A_D_STORE((ks * KSCALES + 1) * BM + buf_ib, ue4m3_to_fp32(blk.d1) * 0.5);
     }
 }
 
@@ -518,8 +542,13 @@ struct block_b_prefetch {
 
 block_b_prefetch block_b_load(uint ib_outer, uint ib_inner, uint loadr) {
     block_b_prefetch blk;
+#ifdef ABL_NO_BGLOBAL
+    blk.qs = ivec4(ib_outer * 2654435761u + ib_inner, loadr, ib_outer, ib_inner);
+    blk.d = float16_t(1.0);
+#else
     blk.qs = data_b[ib_outer].qs[ib_inner * 2 + loadr];
     blk.d = data_b[ib_outer].ds[ib_inner].x;
+#endif
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
     blk.s = data_b[ib_outer].ds[ib_inner].y;
 #endif
@@ -553,13 +582,13 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
             const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;
 #endif
 
-#define PREFETCH_BLOCK(blk)                                                                     \
+#define PREFETCH_BLOCK_INTO(blk, PA, PB)                                                                     \
     [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
         const uint buf_ib = loadc_a + li * loadstride_a;                                        \
         if (buf_ib < BM) {                                                                      \
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;                                \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                pre_a[li * BK_STEP + ks] = block_a_load(ib + ks, loadr_a);                      \
+                PA[li * BK_STEP + ks] = block_a_load(ib + ks, loadr_a);                      \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \
@@ -569,17 +598,17 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
             B_IB_CALC                                                                           \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
                 const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                   \
-                pre_b[li * BK_STEP + ks] = block_b_load(ib_k / 4, ib_k % 4, loadr_b);          \
+                PB[li * BK_STEP + ks] = block_b_load(ib_k / 4, ib_k % 4, loadr_b);          \
             }                                                                                   \
         }                                                                                       \
     }
 
-#define STORE_BLOCK_TO_LDS(blk)                                                                 \
+#define STORE_BLOCK_TO_LDS_FROM(blk, PA, PB)                                                                 \
     [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
         const uint buf_ib = loadc_a + li * loadstride_a;                                        \
         if (buf_ib < BM) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                block_a_to_shmem(pre_a[li * BK_STEP + ks], buf_ib, ks, loadr_a);                \
+                block_a_to_shmem(PA[li * BK_STEP + ks], buf_ib, ks, loadr_a);                \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \
@@ -588,7 +617,10 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
         if (buf_ib < BN) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
                 const bool in_bounds = (blk) + ks * BK < end_k;                                 \
-                block_b_to_shmem(pre_b[li * BK_STEP + ks], buf_ib, ks, loadr_b, in_bounds);     \
+                block_b_to_shmem(PB[li * BK_STEP + ks], buf_ib, ks, loadr_b, in_bounds);     \
             }                                                                                   \
         }                                                                                       \
     }
+
+#define PREFETCH_BLOCK(blk) PREFETCH_BLOCK_INTO(blk, pre_a, pre_b)
+#define STORE_BLOCK_TO_LDS(blk) STORE_BLOCK_TO_LDS_FROM(blk, pre_a, pre_b)
