@@ -74,6 +74,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <set>
 
 #include <unordered_map>
+#include <unordered_set>
 
 #include <shared_mutex>
 
@@ -1276,6 +1277,9 @@ struct ggml_backend_vk_context {
     // number of additional consecutive nodes that are being fused with the
     // node currently being processed
     int num_additional_fused_ops {};
+    // gated_delta_net state copies elided because the gdn writes the cache directly (per graph)
+    std::unordered_set<const ggml_tensor *> gdn_elided_cpys;
+    const ggml_tensor * gdn_state_dst {};
     // Bitmask of which fused ops need to write an intermediate value to memory.
     // Bit 'i' means nodes[start_of_fusion + i] writes to memory.
     // If there's no fusion, bit 0 is still set.
