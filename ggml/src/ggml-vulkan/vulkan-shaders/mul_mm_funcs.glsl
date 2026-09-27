@@ -501,6 +501,52 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         store_a(col, k_pair, FLOAT_TYPEV2(dl * (qs.x - hm.x),
                                         dl * (qs.y - hm.y)));
 
+    } else if ((MmTypeA == GGML_TYPE_Q4_K || MmTypeA == GGML_TYPE_Q5_K) && mm_load_vec_a() == 16) {
+        const uint idx = pos_a + col * p.stride_a / 16 + row;
+        const uint k_pair = row * 8;
+
+        const uint ib = idx / 16;                  // 16 values per idx
+        const uint k0 = (idx % 16) * 16;           // 0,16..240
+        const uint n = k0 / 64;                    // 0..3
+        const uint b = (k0 % 64) / 32;             // 0,1
+        const uint is = 2 * n + b;                 // 0..7
+        const uint qsi = (n * 32 + k0 % 32) / 4;   // first of 4 qs dwords
+
+        vec2 loadd;
+        uvec3 scales;
+        uvec4 qs;
+        uvec4 qh = uvec4(0);
+        if (MmTypeA == GGML_TYPE_Q4_K) {
+            loadd = vec2(a_q4_k.data[ib].dm);
+            scales = uvec3(a_q4_k_p32.data[ib].scales[0], a_q4_k_p32.data[ib].scales[1], a_q4_k_p32.data[ib].scales[2]);
+            qs = uvec4(a_q4_k_p32.data[ib].qs[qsi], a_q4_k_p32.data[ib].qs[qsi + 1],
+                       a_q4_k_p32.data[ib].qs[qsi + 2], a_q4_k_p32.data[ib].qs[qsi + 3]);
+        } else {
+            loadd = vec2(a_q5_k.data[ib].dm);
+            scales = uvec3(a_q5_k_p32.data[ib].scales[0], a_q5_k_p32.data[ib].scales[1], a_q5_k_p32.data[ib].scales[2]);
+            qs = uvec4(a_q5_k_p32.data[ib].qs[qsi], a_q5_k_p32.data[ib].qs[qsi + 1],
+                       a_q5_k_p32.data[ib].qs[qsi + 2], a_q5_k_p32.data[ib].qs[qsi + 3]);
+            const uint qhi = (k0 % 32) / 4;
+            qh = (uvec4(a_q5_k_p32.data[ib].qh[qhi], a_q5_k_p32.data[ib].qh[qhi + 1],
+                        a_q5_k_p32.data[ib].qh[qhi + 2], a_q5_k_p32.data[ib].qh[qhi + 3]) >> (k0 / 32)) & 0x01010101u;
+            qh <<= 4;
+        }
+        const uint scalesoffs = (is & 3) * 8;
+        const uint scidx0 = (is < 4) ? 0 : 2;
+        const uint scidxshift1 = (is < 4) ? scalesoffs : scalesoffs + 2;
+        const uint mbidx0 = (is < 4) ? 1 : 2;
+        const uint mbidxshift0 = (is < 4) ? scalesoffs : scalesoffs + 4;
+        const uint mbidxshift1 = (is < 4) ? scalesoffs : scalesoffs + 2;
+        const uint sc    = ((scales[scidx0] >> scalesoffs) & 0xF) | ((scales[0] >> scidxshift1) & 0x30);
+        const uint mbyte = ((scales[mbidx0] >> mbidxshift0) & 0xF) | ((scales[1] >> mbidxshift1) & 0x30);
+        const float d = loadd.x * float(sc);
+        const float m = -loadd.y * float(mbyte);
+
+        [[unroll]] for (uint w = 0; w < 4; ++w) {
+            const vec4 q = vec4(unpack8(((qs[w] >> (b * 4)) & 0x0F0F0F0Fu) | qh[w]));
+            store_a(col, k_pair + 2 * w,     FLOAT_TYPEV2(fma(d, q.x, m), fma(d, q.y, m)));
+            store_a(col, k_pair + 2 * w + 1, FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m)));
+        }
     } else if (MmTypeA == GGML_TYPE_Q4_K) {
         const uint idx = pos_a + col * p.stride_a / mm_load_vec_a() + row;
         const uint k_pair = row * mm_load_vec_a() / 2;
@@ -576,6 +622,27 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         store_a(col, k_pair, FLOAT_TYPEV2(fma(d, q.x, m), fma(d, q.y, m)));
         store_a(col, k_pair + 1, FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m)));
+    } else if (MmTypeA == GGML_TYPE_Q6_K && mm_load_vec_a() == 16) {
+        const uint idx = pos_a + col * p.stride_a / 16 + row;
+        const uint k_pair = row * 8;
+
+        const uint ib = idx / 16;                   // 16 values per idx
+        const uint iqs = (idx % 16) * 8;            // k0 / 2
+        const uint n = iqs / 64;                    // 0,1
+        const uint b = ((iqs % 64) / 32) * 4;       // 0,4
+        const uint qhshift = ((iqs % 64) / 16) * 2; // 0,2,4,6
+        const uint is = 8 * n + qhshift + (iqs % 16) / 8;
+        const uint qsi = n * 32 + (iqs % 32);
+        const uint qhi = n * 16 + (iqs % 16);
+
+        const float dscale = float(a_q6_k.data[ib].d) * float(a_q6_k.data[ib].scales[is]);
+
+        [[unroll]] for (uint w = 0; w < 8; ++w) {
+            const uint ql = (uint(a_q6_k_p16.data[ib].ql[qsi + w]) >> b) & 0x0F0F;
+            const uint qh = (uint(a_q6_k_p16.data[ib].qh[qhi + w]) >> qhshift) & 0x0303;
+            const vec2 q = (vec2(unpack8(ql | (qh << 4)).xy) - 32) * dscale;
+            store_a(col, k_pair + w, FLOAT_TYPEV2(q.x, q.y));
+        }
     } else if (MmTypeA == GGML_TYPE_Q6_K) {
         const uint idx = pos_a + col * p.stride_a / mm_load_vec_a() + row;
         const uint k_pair = row * mm_load_vec_a() / 2;
