@@ -150,6 +150,16 @@ void main() {
     uint32_t mask_opt_bits = 0;
     f16vec4 mask_cache[Bc * Br / 4 / WorkGroupSize];
 
+    // Q does not change over the KV loop: keep its B fragments in registers (head sizes up to 256)
+    const bool Q_IN_REGS = HSK_pad <= 256;
+    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QRegs[Q_IN_REGS ? HSK_pad / 16 : 1];
+    if (Q_IN_REGS) {
+        barrier();
+        [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
+            coopMatLoad(QRegs[d], Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
+        }
+    }
+
     [[dont_unroll]]
     for (uint32_t j = start_j; j < end_j; ++j) {
 
@@ -319,7 +329,11 @@ void main() {
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
             }
 
-            coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
+            if (Q_IN_REGS) {
+                QMat = QRegs[d];
+            } else {
+                coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
+            }
 
             SfMat = coopMatMulAdd(KMat, QMat, SfMat);
         }
