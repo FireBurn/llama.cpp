@@ -84,6 +84,7 @@ layout (constant_id = 8) const uint TN = 16;
 layout (constant_id = 9) const uint TK = 16;
 layout (constant_id = 10) const uint WARP = 32;
 layout (constant_id = 11) const uint DEVICE_ARCH = 0; // vk_device_architecture (ggml-vulkan.cpp)
+layout (constant_id = 12) const uint CONST_LUT = 0;   // look up iq4/mxfp4 codebooks as a constant array
 #define VK_ARCH_AMD_RDNA4 5u
 
 #define BK 32
@@ -157,15 +158,19 @@ ACC_TYPE cm1_accumulate(ACC_TYPE prev, int acc_e, float scale_a, float nbias_a, 
 
 void main() {
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
-    if (gl_LocalInvocationIndex < 16u) {
-        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
+    if (CONST_LUT == 0) {
+        if (gl_LocalInvocationIndex < 16u) {
+            cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
+        }
+        barrier();
     }
-    barrier();
 #elif defined(DATA_A_MXFP4)
-    if (gl_LocalInvocationIndex < 16u) {
-        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
+    if (CONST_LUT == 0) {
+        if (gl_LocalInvocationIndex < 16u) {
+            cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
+        }
+        barrier();
     }
-    barrier();
 #elif defined(DATA_A_NVFP4)
     if (gl_LocalInvocationIndex < 16u) {
         cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
