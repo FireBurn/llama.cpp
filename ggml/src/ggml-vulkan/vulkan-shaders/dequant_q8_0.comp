@@ -18,7 +18,21 @@ void main() {
         return;
     }
 
-#ifdef DEQUANT_TRANSPOSE
+#if defined(DEQUANT_KTILE) || defined(DEQUANT_VTILE)
+    // read [HS, NH, KV, NS], write per head 16x16 tiles (kv/16, h/16): K row-major, V transposed
+    const uint HS = p.M, NH = p.K, KVn = p.stride_a;
+    const uint e0 = ib * 32 + 16 * il;
+    const uint kv = (e0 / (HS * NH)) % KVn;
+    const uint head_base = ((e0 / (HS * NH * KVn)) * NH + (e0 / HS) % NH) * (HS * KVn);
+    const uint tile = (kv / 16) * (HS / 16) + (e0 % HS) / 16;
+#if defined(DEQUANT_KTILE)
+    const uint b_idx = head_base + tile * 256 + (kv % 16) * 16;
+    const uint b_step = 1;
+#else
+    const uint b_idx = head_base + tile * 256 + (kv % 16);
+    const uint b_step = 16;
+#endif
+#elif defined(DEQUANT_TRANSPOSE)
     // read [HS, NH, KV, NS], write [HS, KV, NH, NS]
     const uint HS = p.M, NH = p.K, KVn = p.stride_a;
     const uint e0 = ib * 32;
@@ -35,8 +49,14 @@ void main() {
 
     const uint q_idx = 16*il;
 
+#if defined(DEQUANT_KTILE) || defined(DEQUANT_VTILE)
+    [[unroll]] for (uint l = 0; l < 16; ++l) {
+        data_b[b_idx + l * b_step] = D_TYPE(d * data_a[ib].qs[q_idx + l]);
+    }
+#else
     [[unroll]] for (uint l = 0; l < 16; l += 2) {
         data_b[b_idx + l    ] = D_TYPE(d * data_a[ib].qs[q_idx + l    ]);
         data_b[b_idx + l + 1] = D_TYPE(d * data_a[ib].qs[q_idx + l + 1]);
     }
+#endif
 }

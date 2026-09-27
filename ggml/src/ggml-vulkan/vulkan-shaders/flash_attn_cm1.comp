@@ -320,6 +320,9 @@ void main() {
             if (stage_k) {
                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride;
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
+            } else if (TILED_KV) {
+                const uint kb = (j * Bc + gl_SubgroupID * MatBc) / 16;
+                coopMatLoad(KMat, data_kv4, k_offset / 4 + (kb * (HSK / 16) + d) * 64, 4, gl_CooperativeMatrixLayoutRowMajor);
             } else {
                 const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
                 coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
@@ -512,8 +515,13 @@ void main() {
                     if (!USE_DECODE_V && !KV_bounds_check && !USE_SPARSE) {
                         // F16/BF16 values can be loaded directly from global memory
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
-                        const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
-                        coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                        if (TILED_KV) {
+                            const uint vt = v_offset / 4 + ((v_tile_row / 16) * (HSV / 16) + hsv_offset / 16) * 64;
+                            coopMatLoad(QMat, data_vv4, vt, 4, gl_CooperativeMatrixLayoutColumnMajor);
+                        } else {
+                            const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
+                            coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                        }
                     } else {
                         const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);
                         coopMatLoad(QMat, kvsh, v_tile_offset, vsh_stride, gl_CooperativeMatrixLayoutRowMajor);
