@@ -496,8 +496,9 @@ bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset
 
 void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
-    // Buffer is already mapped
-    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+    // Buffer is already mapped. Large writes to host-visible VRAM (resizable BAR) are faster as a DMA copy than CPU stores over PCIe.
+    const bool bar = (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eDeviceLocal) && !dst->device->uma;
+    if ((dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) && !(bar && width * height >= (4u << 20))) {
         GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
         if (width == spitch && width == dpitch) {
