@@ -1268,7 +1268,6 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 }
 
 static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
-    GGML_UNUSED(n_rows);
     GGML_UNUSED(n_kv);
     GGML_UNUSED(k_type);
     GGML_UNUSED(v_type);
@@ -1284,7 +1283,10 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     const uint32_t num_subgroups = 4;
 
-    result.block_rows = coopmat_block_rows;
+    // Large batches: several 16-row tiles per subgroup, so each K/V tile feeds more query rows.
+    static const int br_env = getenv("GGML_VK_FA_CM1_BR") ? atoi(getenv("GGML_VK_FA_CM1_BR")) : 16; // TEMP
+    const uint32_t row_tiles = n_rows >= 64 ? (uint32_t) br_env / 16 : 1;
+    result.block_rows = coopmat_block_rows * row_tiles;
     result.block_cols = coopmat_block_cols * num_subgroups;
     result.row_split = num_subgroups;
     result.subgroup_size = device->subgroup_size;
@@ -1295,6 +1297,10 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
+    static const bool force_staging = getenv("GGML_VK_FA_STAGING") != nullptr; // TEMP
+    if (force_staging) {
+        result.shmem_staging = 1;
+    }
     return result;
 }
 
@@ -3092,6 +3098,25 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q5_1], "dequant_q5_1", dequant_q5_1_len, dequant_q5_1_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q8_0], "dequant_q8_0", dequant_q8_0_len, dequant_q8_0_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant_transpose[GGML_TYPE_Q8_0], "dequant_q8_0_transpose", dequant_q8_0_transpose_len, dequant_q8_0_transpose_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dequant_vt[GGML_TYPE_Q8_0], "dequant_q8_0_vt", dequant_q8_0_vt_len, dequant_q8_0_vt_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    if (device->coopmat_support && device->architecture == vk_device_architecture::AMD_RDNA4 &&
+        device->subgroup_size_control && device->subgroup_min_size <= 32 && device->fp16) {
+        const uint32_t hs_list[3] = { 64, 128, 256 };
+        for (uint32_t h = 0; h < 3; ++h) {
+            for (uint32_t m = 0; m < 2; ++m) {
+                const uint32_t hs = hs_list[h];
+                // spec constants follow flash_attn_base.glsl: WG, Br, Bc, HSK, HSV, Clamp, D_split, row_split,
+                // SubGroupSize, SHMEM_STAGING, Flags, LIMIT_OCCUPANCY_SHMEM, FaTypeK, FaTypeV, block bytes K/V
+                const std::vector<uint32_t> spec = { 128, 64, 64, hs, hs, 0, 1, 4, 32, 0, m ? 2u : 0u, 0,
+                                                     (uint32_t)GGML_TYPE_F16, (uint32_t)GGML_TYPE_F16, 2, 2 };
+                ggml_vk_create_pipeline(device, device->pipeline_fa_cm1r[h][m], m ? "flash_attn_cm1r_mask" : "flash_attn_cm1r",
+                                        flash_attn_cm1r_f32_f16_cm1_len, flash_attn_cm1r_f32_f16_cm1_data, "main", 8,
+                                        sizeof(vk_flash_attn_push_constants), {64, 1, 1}, spec, 1, true, true, 32);
+            }
+        }
+    }
+#endif
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q2_K], "dequant_q2_k", dequant_q2_k_len, dequant_q2_k_data, "main", 2, 5 * sizeof(uint32_t), {256 * 64, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q3_K], "dequant_q3_k", dequant_q3_k_len, dequant_q3_k_data, "main", 2, 5 * sizeof(uint32_t), {256 * 64, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q4_K], "dequant_q4_k", dequant_q4_k_len, dequant_q4_k_data, "main", 2, 5 * sizeof(uint32_t), {256 * 32, 1, 1}, {}, 1);
@@ -7986,7 +8011,7 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     // BF16 PVMat accumulator is f32 (no bf16 accumulator support), so pvsh is vec4 (16 bytes)
     const uint32_t pvsh_elem_size = (k_type == GGML_TYPE_BF16) ? 16u : f16vec4;
     const uint32_t osh_stride = params.row_split * MatBr / 4;
-    const uint32_t pvsh = MatBc * osh_stride * pvsh_elem_size;
+    const uint32_t pvsh = std::max(Br, MatBc) * osh_stride * pvsh_elem_size;
 
     const uint32_t slope = Br * acctype;
 
@@ -8083,7 +8108,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k_type_eff, v_type_eff, f32acc);
-    const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
+    // coopmat1 uses multi-tile rows only for large batches; the gqa path runs with 16 rows.
+    const uint32_t max_gqa = std::min(tuning_params.path == FA_COOPMAT1 ? 16u : tuning_params.block_rows, 32u);
 
     if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
@@ -8118,6 +8144,18 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     memcpy(&scale,         (const float *) dst->op_params + 0, sizeof(float));
     memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
     memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
+
+    // Register-resident coopmat FA for large batches (RDNA4): quantized K/V go through the f16 scratch,
+    // with V written transposed.
+    static const bool disable_cm1r = getenv("GGML_VK_DISABLE_FA_CM1R") != nullptr;
+    const int cm1r_hs_idx = HSK == 64 ? 0 : HSK == 128 ? 1 : HSK == 256 ? 2 : -1;
+    const bool use_cm1r = !disable_cm1r && use_dequant_kv && cm1r_hs_idx >= 0 && HSK == HSV &&
+                          ctx->device->pipeline_fa_cm1r[cm1r_hs_idx][0] != nullptr &&
+                          ctx->device->pipeline_dequant_vt[v->type] != nullptr &&
+                          gqa_ratio <= 1 && gqa_nq == 1 && N >= 64 && KV % 64 == 0 &&
+                          sinks == nullptr && max_bias == 0.0f && logit_softcap == 0.0f &&
+                          (mask == nullptr || ((uint32_t)mask->ne[0] == KV && mask->nb[1] == KV * sizeof(ggml_fp16_t)));
+    if (getenv("CM1R_DBG") && N >= 64) { static int c = 0; if (c++ < 4) fprintf(stderr, "K ne=[%ld,%ld,%ld,%ld] nb=[%zu,%zu,%zu,%zu] ", (long)k->ne[0],(long)k->ne[1],(long)k->ne[2],(long)k->ne[3], k->nb[0],k->nb[1],k->nb[2],k->nb[3]); if (c <= 4) fprintf(stderr, "CM1R? deq=%d hs=%d pipe=%d vt=%d gqa=%u nq=%u N=%u KV=%u sinks=%d mb=%g sc=%g mask_ne0=%ld nb1=%zu\n", use_dequant_kv, cm1r_hs_idx, cm1r_hs_idx >= 0 && ctx->device->pipeline_fa_cm1r[cm1r_hs_idx][0] != nullptr, ctx->device->pipeline_dequant_vt[v->type] != nullptr, gqa_ratio, gqa_nq, N, KV, sinks != nullptr, max_bias, logit_softcap, mask ? (long)mask->ne[0] : -1L, mask ? mask->nb[1] : 0); } // TEMP
 
     if (logit_softcap != 0) {
         scale /= logit_softcap;
@@ -8168,7 +8206,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
-    bool use_mask_opt = mask && !use_sparse && gqa_nq == 1 && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
+    bool use_mask_opt = mask && !use_cm1r && !use_sparse && gqa_nq == 1 && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
                         && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff,
@@ -8242,6 +8280,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         if (total_wgs_no_split < shader_core_count * 2) {
             split_k = shader_core_count * 2 / total_wgs_no_split;
         }
+    }
+
+    if (use_cm1r) {
+        split_k = 1;
+        split_kv = KV;
     }
 
     if (!use_sparse && split_k > 1) {
@@ -8365,11 +8408,15 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         const uint64_t k_f16_sz = (uint64_t)ggml_nelements(k) * fp;
         const uint64_t v_f16_sz = (uint64_t)ggml_nelements(v) * fp;
         if (ctx->prealloc_size_x < k_f16_sz + v_f16_sz) {
-            ctx->prealloc_size_x = k_f16_sz + v_f16_sz;
+            // The KV length grows every ubatch, and a resize drains the GPU: grow with headroom.
+            static const bool exact = getenv("GGML_VK_FA_SCRATCH_EXACT") != nullptr; // TEMP A/B
+            const uint64_t need = k_f16_sz + v_f16_sz;
+            const uint64_t grow = exact ? need : std::max<uint64_t>(need, ctx->prealloc_size_x + ctx->prealloc_size_x / 2);
+            ctx->prealloc_size_x = exact ? need : ROUNDUP_POW2(grow, 64ull << 20);
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         vk_pipeline tr_k = ctx->device->pipeline_dequant_transpose[k->type];
-        vk_pipeline tr_v = ctx->device->pipeline_dequant_transpose[v->type];
+        vk_pipeline tr_v = use_cm1r ? ctx->device->pipeline_dequant_vt[v->type] : ctx->device->pipeline_dequant_transpose[v->type];
         ggml_pipeline_request_descriptor_sets(ctx, tr_k, 1);
         ggml_pipeline_request_descriptor_sets(ctx, tr_v, 1);
         if (ctx->prealloc_x_need_sync) {
@@ -8530,6 +8577,14 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                     {split_k_buf, sinks_buf, dst_buf},
                                     pc2, { (uint32_t)ne1, HSV, (uint32_t)(ne2 * ne3) });
         ctx->prealloc_split_k_need_sync = true;
+    } else if (use_cm1r) {
+        if (getenv("CM1R_DBG")) { static int c = 0; if (c++ < 3) fprintf(stderr, "CM1R N=%u KV=%u HS=%u mask=%d\n", N, KV, HSK, mask != nullptr); } // TEMP
+        vk_pipeline p_cm1r = ctx->device->pipeline_fa_cm1r[cm1r_hs_idx][mask != nullptr];
+        ggml_pipeline_request_descriptor_sets(ctx, p_cm1r, 1);
+        // wg_denoms[0] == 64: one workgroup per 64 query rows
+        ggml_vk_dispatch_pipeline(ctx, subctx, p_cm1r,
+                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf},
+                                    pc, { (uint32_t)N, workgroups_y, workgroups_z });
     } else {
         if (gqa_ratio > 1) {
             // When using gqa, we want one actual workgroup per batch, so cancel out wg_denoms
