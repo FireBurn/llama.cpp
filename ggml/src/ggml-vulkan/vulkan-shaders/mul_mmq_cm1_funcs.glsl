@@ -542,6 +542,11 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
 }
 
 // ===== Framework macros =====
+#ifdef ABL_NO_BOUNDS
+#define ABL_B_BOUNDS(x) (true)
+#else
+#define ABL_B_BOUNDS(x) (x)
+#endif
 
 #ifdef MUL_MAT_ID
 #define B_IB_CALC                                                                               \
@@ -568,7 +573,7 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
         if (buf_ib < BN) {                                                                      \
             B_IB_CALC                                                                           \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                   \
+                const uint ib_k = ABL_B_BOUNDS((blk) + ks * BK < end_k) ? (ib + ks) : ib;     \
                 pre_b[li * BK_STEP + ks] = block_b_load(ib_k / 4, ib_k % 4, loadr_b);          \
             }                                                                                   \
         }                                                                                       \
@@ -587,7 +592,7 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
         const uint buf_ib = loadc_b + li * loadstride_b;                                        \
         if (buf_ib < BN) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                const bool in_bounds = (blk) + ks * BK < end_k;                                 \
+                const bool in_bounds = ABL_B_BOUNDS((blk) + ks * BK < end_k);                   \
                 block_b_to_shmem(pre_b[li * BK_STEP + ks], buf_ib, ks, loadr_b, in_bounds);     \
             }                                                                                   \
         }                                                                                       \

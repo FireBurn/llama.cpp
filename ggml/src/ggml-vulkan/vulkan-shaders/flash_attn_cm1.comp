@@ -354,7 +354,12 @@ void main() {
 #ifdef FA_ABL_NO_KLOAD
                 KMat = coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA>(FLOAT_TYPE(0.01 * float(d + 1)));
 #else
-                coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                if (TILED_KV) {
+                    const uint kb = (j * Bc + gl_SubgroupID * MatBc) / 16;
+                    coopMatLoad(KMat, data_kv4, k_offset / 4 + (kb * (HSK / 16) + d) * 64, 4, gl_CooperativeMatrixLayoutRowMajor);
+                } else {
+                    coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                }
 #endif
             }
             } else {
@@ -568,7 +573,12 @@ void main() {
 #ifdef FA_ABL_NO_VLOAD
                         QMat = coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB>(FLOAT_TYPE(0.01 * float(bc_chunk + 1)));
 #else
-                        coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                        if (TILED_KV) {
+                            const uint vt = v_offset / 4 + ((v_tile_row / 16) * (HSV / 16) + hsv_offset / 16) * 64;
+                            coopMatLoad(QMat, data_vv4, vt, 4, gl_CooperativeMatrixLayoutColumnMajor);
+                        } else {
+                            coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                        }
 #endif
                     } else {
                         const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);

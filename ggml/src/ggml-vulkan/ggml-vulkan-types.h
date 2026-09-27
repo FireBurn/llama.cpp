@@ -801,6 +801,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_dequant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_dequant_transpose[GGML_TYPE_COUNT]; // fused dequant+transpose for FA quant-KV
     vk_pipeline pipeline_dequant_vt[GGML_TYPE_COUNT];        // dequant to per-head transposed V^T for FA cm1r
+    vk_pipeline pipeline_dequant_ktile[GGML_TYPE_COUNT];     // dequant to per-head 16x16 K tiles for FA cm1
+    vk_pipeline pipeline_dequant_vtile[GGML_TYPE_COUNT];     // dequant to per-head 16x16 transposed V tiles for FA cm1
     vk_pipeline pipeline_fa_cm1r[3][2];                      // [HS 64/128/256][mask]
     vk_pipeline pipeline_dequant_mul_mat_vec_f32_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
     vk_pipeline pipeline_dequant_mul_mat_vec_f16_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
@@ -836,6 +838,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
+    vk_pipeline pipeline_concat_transpose_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_log[2];

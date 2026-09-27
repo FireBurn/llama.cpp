@@ -245,6 +245,10 @@ size_t ggml_vk_descriptor_offset(size_t tensor_offset, size_t alignment, size_t 
 uint32_t ggml_vk_concat_unit_size(ggml_type type);
 bool ggml_vk_concat_supported(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst);
 
+// EXPERIMENT: hardware performance counters per dispatch (GGML_VK_PERFQ="counter,...", GGML_VK_PERFQ_FILTER=substr)
+int  ggml_vk_perfq_begin(vk::CommandBuffer cb, const char * name);
+void ggml_vk_perfq_end(vk::CommandBuffer cb, int idx);
+
 template <typename T>
 inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements) {
     const uint32_t wg0 = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
@@ -276,7 +280,9 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
                                 {});
     {
         ggml_vk_debug_label dbg(subctx, pipeline->name, wg0, wg1, wg2);
+        const int pq = ggml_vk_perfq_begin(subctx->s->buffer->buf, pipeline->name.c_str());
         subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+        ggml_vk_perfq_end(subctx->s->buffer->buf, pq);
     }
 }
 
