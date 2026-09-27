@@ -29,6 +29,8 @@ const bool USE_SPARSE      = (Flags & 16) != 0;
 // Multi-query GQA: several query rows are folded into the gqa rows of one tile, so a small batch
 // shares a single pass over K/V. Row r maps to query row r / gqa_ratio and head r % gqa_ratio.
 const bool USE_MQ          = (Flags & 32) != 0;
+// K/V are f16 scratch in 16x16 tiles (K row-major, V transposed): each fragment is one contiguous 512 byte load
+const bool TILED_KV        = (Flags & 64) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
