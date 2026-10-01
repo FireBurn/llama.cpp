@@ -6581,6 +6581,11 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         switch (src0_type) {
         case GGML_TYPE_Q8_0:
             return device->architecture == vk_device_architecture::AMD_GCN;
+        // single tokens are faster with the float path on RDNA4
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_IQ4_XS:
+            return device->architecture != vk_device_architecture::AMD_RDNA4;
         default:
             return true;
         }
