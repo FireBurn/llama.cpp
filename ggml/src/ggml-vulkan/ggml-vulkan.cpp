@@ -1376,13 +1376,18 @@ vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_
     const bool old_amd_windows = device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eAmdProprietary &&
                                  (device->architecture == AMD_GCN || device->architecture == AMD_RDNA1 || device->architecture == AMD_RDNA2);
 
+    // transposed P in shared memory: contiguous WMMA operand loads on AMD RDNA3/4
+    const bool p_transposed = device->vendor_id == VK_VENDOR_ID_AMD &&
+                              (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4);
+
     uint32_t flags = (use_mask_opt      ? 1 : 0) |
                      (use_mask          ? 2 : 0) |
                      (use_logit_softcap ? 4 : 0) |
                      (old_amd_windows   ? 8 : 0) |
                      (use_sparse        ? 16 : 0) |
                      (use_mq            ? 32 : 0) |
-                     (use_tiled_kv      ? 64 : 0);
+                     (use_tiled_kv      ? 64 : 0) |
+                     (p_transposed      ? 128 : 0);
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 

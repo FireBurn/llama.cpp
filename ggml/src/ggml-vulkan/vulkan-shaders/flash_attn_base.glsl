@@ -31,6 +31,8 @@ const bool USE_SPARSE      = (Flags & 16) != 0;
 const bool USE_MQ          = (Flags & 32) != 0;
 // K/V are f16 scratch in 16x16 tiles (K row-major, V transposed): each fragment is one contiguous 512 byte load
 const bool TILED_KV        = (Flags & 64) != 0;
+// P is kept transposed in shared memory so coopmat operand loads are contiguous (AMD WMMA)
+const bool P_TRANSPOSED    = (Flags & 128) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
