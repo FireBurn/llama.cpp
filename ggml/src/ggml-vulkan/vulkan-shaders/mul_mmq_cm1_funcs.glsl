@@ -1,3 +1,11 @@
+// CONST_LUT: index the codebook as a constant array (RADV lowers it to byte permutes), else read it from shared memory.
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
+#define KV_LOOKUP(i) (CONST_LUT != 0 ? kvalues_iq4nl_const[i] : cm1_kvalues[i])
+#elif defined(DATA_A_MXFP4)
+#define KV_LOOKUP(i) (CONST_LUT != 0 ? kvalues_mxfp4_const[i] : cm1_kvalues[i])
+#else
+#define KV_LOOKUP(i) cm1_kvalues[i]
+#endif
 // Per-quant-type data structures and functions for the cm1 int8 coopmat path.
 // Each quant type defines:
 //   struct block_a_prefetch  — register data for one A-block per thread
@@ -162,11 +170,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
-        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
-                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(lo_idx.x), KV_LOOKUP(lo_idx.y),
+                      KV_LOOKUP(lo_idx.z), KV_LOOKUP(lo_idx.w)));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
-        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
-                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(hi_idx.x), KV_LOOKUP(hi_idx.y),
+                      KV_LOOKUP(hi_idx.z), KV_LOOKUP(hi_idx.w)));
 
     if (loadr == 0) {
         buf_a_d[ks * BM + buf_ib] = float(blk.d);
@@ -198,11 +206,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
-        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
-                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(lo_idx.x), KV_LOOKUP(lo_idx.y),
+                      KV_LOOKUP(lo_idx.z), KV_LOOKUP(lo_idx.w)));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
-        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
-                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(hi_idx.x), KV_LOOKUP(hi_idx.y),
+                      KV_LOOKUP(hi_idx.z), KV_LOOKUP(hi_idx.w)));
 
     if (loadr == 0) {
         buf_a_d[ks * BM + buf_ib] = blk.d;
@@ -230,11 +238,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
-        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
-                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(lo_idx.x), KV_LOOKUP(lo_idx.y),
+                      KV_LOOKUP(lo_idx.z), KV_LOOKUP(lo_idx.w)));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
-        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
-                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(hi_idx.x), KV_LOOKUP(hi_idx.y),
+                      KV_LOOKUP(hi_idx.z), KV_LOOKUP(hi_idx.w)));
 
     if (loadr == 0) {
         buf_a_d[ks * BM + buf_ib] = e8m0_to_fp32(blk.e) * 0.5;
@@ -492,11 +500,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const uint sub_base = (loadr >> 1) * 4;
     const uint byte_group = loadr & 1u;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + sub_base + byte_group] =
-        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
-                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(lo_idx.x), KV_LOOKUP(lo_idx.y),
+                      KV_LOOKUP(lo_idx.z), KV_LOOKUP(lo_idx.w)));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + sub_base + 2 + byte_group] =
-        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
-                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+        pack32(i8vec4(KV_LOOKUP(hi_idx.x), KV_LOOKUP(hi_idx.y),
+                      KV_LOOKUP(hi_idx.z), KV_LOOKUP(hi_idx.w)));
 
     if (loadr == 0) {
         buf_a_d[(ks * KSCALES    ) * BM + buf_ib] = ue4m3_to_fp32(blk.d0) * 0.5;
