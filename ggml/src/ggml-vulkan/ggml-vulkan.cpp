@@ -13745,9 +13745,15 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
     auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {
         const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
 
-        // mat-vec only
+        // mat-vec only: a single row, or a small batch of columns that is dispatched as a mat-vec
         if (ggml_nrows(mul) != 1) {
-            return false;
+            const ggml_tensor * mm_a = mul->src[0];
+            const ggml_tensor * mm_b = mul->src[1];
+            if (mul->op != GGML_OP_MUL_MAT || mul->ne[1] > mul_mat_vec_max_cols || mul->ne[2] != 1 || mul->ne[3] != 1 ||
+                mm_b->ne[2] * mm_b->ne[3] != 1 || !ggml_is_contiguous(mul) ||
+                !(mm_a->type == GGML_TYPE_F32 || mm_a->type == GGML_TYPE_F16 || mm_a->type == GGML_TYPE_BF16 || ggml_is_quantized(mm_a->type))) {
+                return false;
+            }
         }
         // shaders assume the types match
         if (mul->type != bias->type) {
