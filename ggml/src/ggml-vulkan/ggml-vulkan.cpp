@@ -5930,7 +5930,10 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
     }
 
     uint32_t split_k = 1;
-    if (ctx->device->shader_core_count != 0 && n >= pipeline->wg_denoms[1]) {
+    // On AMD, also split batches of at least half a tile (e.g. speculative-decoding verification
+    // batches of 33-63 tokens) and fill up to four waves of tiles with split_k.
+    const bool amd_small_n = ctx->device->vendor_id == VK_VENDOR_ID_AMD && n <= 64;
+    if (ctx->device->shader_core_count != 0 && n >= (amd_small_n ? pipeline->wg_denoms[1] / 2 : pipeline->wg_denoms[1])) {
         // If k is 'large' and the SMs will fill less than halfway, use split_k.
         uint32_t m_tiles = CEIL_DIV(m, pipeline->wg_denoms[0]);
         uint32_t n_tiles = CEIL_DIV(n, pipeline->wg_denoms[1]);
@@ -5940,6 +5943,8 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
                 split_k = ctx->device->shader_core_count / (m_tiles * n_tiles);
             } else if (m_tiles * n_tiles <= ctx->device->shader_core_count * 2 / 3) {
                 split_k = 3;
+            } else if (amd_small_n && m_tiles * n_tiles <= ctx->device->shader_core_count * 4) {
+                split_k = 4;
             }
             // Cap the split at 8x. Unless k is huge this is a lot of overhead.
             split_k = std::min(split_k, 8u);
