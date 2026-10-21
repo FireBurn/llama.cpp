@@ -2890,7 +2890,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
     // RDNA3/4: above four columns, static 4 rows for all types bench faster than the default
     const bool is_rdna3_or_4 = device->vendor_id == VK_VENDOR_ID_AMD && (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4);
-    auto const &rm_int_n = [&](uint32_t rows, uint32_t i) { return (is_rdna3_or_4 && i >= 4) ? 4u : rows; };
+    const bool is_rdna4 = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_RDNA4;
+    // RDNA4: two rows from two columns up bench faster for the speculative decoding verification batches
+    auto const &rm_int_n = [&](uint32_t rows, uint32_t i) { return is_rdna4 && i >= 1 ? 2u : (is_rdna3_or_4 && i >= 4) ? 4u : rows; };
     // RDNA3-class dGPU: legacy quants are faster with 4 rows from 2 columns
     auto const &rm_int_n_stdq = [&](uint32_t rows, uint32_t i) { return (is_rdna3_or_4 && !device->uma && i >= 1) ? 4u : rows; };
     // RDNA3/4 and NVIDIA except pre-Turing: use 4 rows for MUL_MAT_ID MMVQ.
