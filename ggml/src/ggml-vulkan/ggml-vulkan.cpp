@@ -8371,9 +8371,12 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     } else if (gqa_ratio > 1 && workgroups_x <= Br) {
         split_k = shader_core_count * 2 / (workgroups_x * workgroups_y * workgroups_z);
     } else if (gqa_ratio <= 1) {
+        // On AMD, batches of 9 to a few hundred rows at long context need more splits than two
+        // workgroups per CU to keep enough K/V loads in flight.
+        const uint32_t target_wgs = shader_core_count * (ctx->device->vendor_id == VK_VENDOR_ID_AMD ? 8 : 2);
         uint32_t total_wgs_no_split = Tr * workgroups_y * workgroups_z;
-        if (total_wgs_no_split < shader_core_count * 2) {
-            split_k = shader_core_count * 2 / total_wgs_no_split;
+        if (total_wgs_no_split < target_wgs) {
+            split_k = target_wgs / total_wgs_no_split;
         }
     }
 
